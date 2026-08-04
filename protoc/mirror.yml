@@ -1,0 +1,330 @@
+name: protoc
+
+# One package, and every key below is package-owned, so there is deliberately
+# no root `mirror-base.yml` and no `extends:` chain — the shape
+# `mirror-astral-sh` ships. Adding a base later is a content move that renames
+# no generated workflow file.
+
+# Logical index package `protocolbuffers/protoc` at the physical path
+# `ghcr.io/ocx-contrib/protocolbuffers/protoc` — slash segments, never
+# hyphen-flattened. The first segment must be this repo's own owner or
+# `GITHUB_TOKEN` cannot create the package.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/protocolbuffers/protoc
+
+# ─── Why url_index and not github_release ───────────────────────────────────
+#
+# protobuf tags its compiler releases with a TWO-component version — `v33.0`,
+# `v34.2`, `v35.1` — and ocx-mirror's version parser requires a full `X.Y.Z`.
+# The failure is SILENT: every version is warned past and the run exits 0, so a
+# `github_release` spec here would have gone green in CI forever while
+# publishing nothing. Measured 2026-08-04 against ocx-mirror 0.5.2 on exactly
+# this spec with `source.type: github_release`:
+#
+#   $ ocx-mirror package check --dry-run protoc/mirror.yml
+#   WARN [protoc] Skipping version 35.1: version '35.1' needs full X.Y.Z format
+#   WARN [protoc] Skipping version 35.0: version '35.0' needs full X.Y.Z format
+#   …  (once per release, all 80 of them, including every in-range version)
+#   INFO [protoc] Nothing to mirror
+#   $ echo $?
+#   0
+#
+# `cascade: false` does not change it — the requirement is unconditional in the
+# parser, not a consequence of cascade-alias derivation. `tag_pattern` is a
+# regex and cannot synthesize the absent third component, so the normalization
+# has to happen in a generator: `scripts/generate.py` maps `vX.Y` to `X.Y.0`,
+# the standard semver completion of a partial version. The invented `.0` shows
+# up only in the leaf tag — the cascade aliases are `35.1`, `35` and `latest`,
+# so `ocx add protocolbuffers/protoc@35.1` resolves under upstream's own
+# spelling. Fleet precedent for normalizing an upstream version into the
+# pipeline's grammar is `mirror-amazon/corretto` (`21.0.12.8.1` → `21.0.12_8001`,
+# and a synthesized `0` minor for JDK 8).
+#
+# The URLs the generator emits are GitHub's own release-asset URLs, so the
+# bytes published are still upstream's release binaries — only the version
+# STRING is normalized.
+source:
+  type: url_index
+  generator:
+    # Read relative to THIS spec's directory, which is also where the script
+    # must live: a nested spec's workflow triggers only on its own `protoc/**`
+    # subtree, so a generator parked elsewhere would never retrigger CI.
+    command: ["uv", "run", "scripts/generate.py"]
+    timeout_seconds: 240
+  # Upstream tag survey, observed 2026-08-04:
+  #
+  #   $ gh api "repos/protocolbuffers/protobuf/releases?per_page=40" \
+  #       --jq '.[] | "\(.tag_name)\t\(.published_at)\tprerelease=\(.prerelease)"'
+  #   v36.0-rc2  2026-08-03  prerelease=true
+  #   v35.1      2026-06-11  prerelease=false
+  #   v35.0      2026-05-19  prerelease=false
+  #   v34.2      2026-05-20  prerelease=false     <-- ONE DAY AFTER v35.0
+  #   v25.9      2026-03-25  prerelease=false     <-- LTS patch, between v34.1/v34.2
+  #   v34.1      2026-03-19  prerelease=false
+  #   …
+  #
+  # protobuf runs several release trains CONCURRENTLY: mainline (v33/v34/v35)
+  # alongside long-lived LTS branches (v25.x, v29.x) that still receive
+  # patches. Publish DATE therefore does not track version order — v34.2 landed
+  # the day after v35.0, and v25.9 sits chronologically between v34.1 and
+  # v34.2. Ordering here is by PARSED VERSION (the pipeline's own semver sort
+  # over the generated index), never by `published_at`, and `versions.min`
+  # below is what confines this mirror to the mainline train.
+
+# ─── License gate (Phase 1.5) — the evidence, not the conclusion ─────────────
+#
+# The GitHub license API gives the WRONG answer here and it must not be
+# believed:
+#
+#   $ gh api repos/protocolbuffers/protobuf/license \
+#       --jq '{spdx: .license.spdx_id, key: .license.key}'
+#   {"key":"other","spdx":"NOASSERTION"}
+#
+# That is a classifier false negative, not a licensing question: protobuf is a
+# monorepo with additional per-directory notices, and GitHub's detector gives
+# up at the root rather than reporting the root file. The root LICENSE was
+# fetched and read directly:
+#
+#   $ gh api repos/protocolbuffers/protobuf/contents/LICENSE --jq .content \
+#       | base64 -d
+#   Copyright 2008 Google Inc.  All rights reserved.
+#   Redistribution and use in source and binary forms, with or without
+#   modification, are permitted provided that the following conditions are met:
+#       * Redistributions of source code must retain the above copyright …
+#       * Redistributions in binary form must reproduce the above copyright …
+#       * Neither the name of Google Inc. nor the names of its contributors …
+#
+# Verbatim three-clause BSD, including the non-endorsement clause. PERMISSIVE:
+# binary redistribution is granted provided the notice is retained, which
+# NOTICE.md does. `NOASSERTION` here is a tooling gap and is recorded as such.
+#
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ────────────────
+#
+# Measured on the real assets at BOTH ends of the range and on both arches:
+#
+#   $ file protoc-35.1-linux-x86_64/bin/protoc
+#   ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), statically
+#   linked, for GNU/Linux 2.6.32, not stripped
+#   $ file protoc-33.0-linux-x86_64/bin/protoc      → statically linked
+#   $ file protoc-35.1-linux-aarch_64/bin/protoc
+#   ELF 64-bit LSB executable, ARM aarch64, version 1 (GNU/Linux), statically
+#   linked, for GNU/Linux 3.7.0, not stripped
+#
+#   $ readelf -l <each>/bin/protoc | grep -c INTERP     → 0   (all three)
+#   $ ldd      <each>/bin/protoc                        → not a dynamic executable
+#   $ readelf -V <each>/bin/protoc | grep -o 'GLIBC_[0-9.]*'   → (no output)
+#
+# Not a UPX artefact — the packer stub defeats exactly this check by hiding
+# PT_INTERP, so it was ruled out rather than assumed:
+#
+#   $ strings -a <each>/bin/protoc | grep -c '^UPX'     → 0   (all three)
+#
+# No PT_INTERP means the artifact requires NOTHING of the host userland, so the
+# Linux keys are BARE — an empty `os.features`. Tagging a static build
+# `+libc.musl` would be a false requirement that hides it from every glibc
+# host. Confirmed by running it, not only by reading the header:
+#
+#   $ docker run --rm -v "$PWD/protoc-35.1-linux-x86_64:/p:ro" alpine:3.20 \
+#       /p/bin/protoc --version
+#   libprotoc 35.1                                      (exit 0)
+#
+# The alpine container leg below is what keeps that universal claim honest on
+# every future release.
+#
+# ─── Asset scope (Phase 2, both directions) ─────────────────────────────────
+#
+# Every one of the 12 in-range tags was re-listed and each regex below checked
+# to match EXACTLY ONE asset on EVERY one of them — 0 matches is a SILENT skip,
+# so the forward pass has to run on the whole range, not just the newest:
+#
+#   $ for t in v33.0 v33.1 v33.2 v33.3 v33.4 v33.5 v33.6 \
+#              v34.0 v34.1 v34.2 v35.0 v35.1; do
+#       gh api repos/protocolbuffers/protobuf/releases/tags/$t --jq '.assets[].name'
+#     done
+#
+# The asset version token agrees with the tag on all 12 (protoc-33.0-* under
+# v33.0, protoc-35.1-* under v35.1, …) — upstream has not shipped a previous
+# release's binaries under a new tag anywhere in range.
+#
+# The inverse pass enumerated every remaining asset to confirm each is
+# deliberately out of scope:
+#
+#   protoc-<V>-linux-x86_32.zip      386     — not in ocx's arch taxonomy
+#   protoc-<V>-win32.zip             386     — likewise
+#   protoc-<V>-linux-ppcle_64.zip    ppc64le — likewise
+#   protoc-<V>-linux-s390_64.zip     s390x   — likewise
+#   protoc-<V>-osx-universal_binary.zip      fat binary; the split per-arch zips
+#                                            are used instead, matching every
+#                                            other OS's per-arch pattern
+#   protobuf-<V>.tar.gz / .zip / .bazel.tar.gz
+#                                    SOURCE distributions of the LIBRARY, not
+#                                    the compiler this package ships
+#   *.intoto.jsonl                   in-toto provenance sidecars, release-wide
+#
+# Upstream ships NO windows/arm64 asset on any release in range — verified in
+# the same listing, not asserted from a comment.
+#
+# Note the upstream platform tokens do not derive from any pattern, which is
+# why every key is an explicit literal rather than a shared regex: `aarch_64`
+# carries an underscore, macOS is `osx` not `darwin`, and Windows is `win64`.
+assets:
+  linux/amd64:
+    - "^protoc-\\d+\\.\\d+-linux-x86_64\\.zip$"
+  linux/arm64:
+    - "^protoc-\\d+\\.\\d+-linux-aarch_64\\.zip$"
+  # Pass 2 (darwin) — uncommented once pass 1 is green end to end.
+  # darwin/amd64:
+  #   - "^protoc-\\d+\\.\\d+-osx-x86_64\\.zip$"
+  # darwin/arm64:
+  #   - "^protoc-\\d+\\.\\d+-osx-aarch_64\\.zip$"
+  # Pass 3 (windows) — amd64 only; upstream ships no arm64 PE.
+  # windows/amd64:
+  #   - "^protoc-\\d+\\.\\d+-win64\\.zip$"
+
+asset_type:
+  # FLAT archive: `bin/`, `include/` and `readme.txt` sit at the archive root
+  # with NO wrapper directory, so `strip_components: 0` is what keeps `bin/`
+  # intact under `${installPath}`. Stripping one component here would DELETE
+  # `bin/` and hoist `protoc` to the bundle root, leaving `metadata.json`'s
+  # `${installPath}/bin` pointing at nothing. Verified by listing rather than
+  # inferred — identical on linux-x86_64, linux-aarch_64, osx-aarch_64 and
+  # win64, at both v33.0 and v35.1:
+  #
+  #   $ unzip -l protoc-35.1-linux-x86_64.zip
+  #   bin/  bin/protoc  include/  include/google/protobuf/*.proto  readme.txt
+  #   $ unzip -l protoc-35.1-win64.zip
+  #   bin/  bin/protoc.exe  include/…  readme.txt
+  #
+  # One global rule, therefore, and one metadata.json for every platform.
+  type: archive
+  strip_components: 0
+
+# The binary set is one name on every platform, so `verify` is cheap and the
+# claim stops being documentation: an upstream archive rearrangement reds the
+# run instead of drifting silently into a wrong `binaries` list. The scan
+# target is `${installPath}/bin`, which holds exactly `protoc` on unix and
+# `protoc.exe` on windows — the scan strips the `.exe` stem, so a single
+# metadata.json serves all platforms.
+bin_scan: verify
+
+metadata:
+  # Resolves against THIS spec's directory, not the repo root.
+  default: metadata.json
+
+catalog:
+  # Resolves against this spec's own directory. Keeping the logo here rather
+  # than at the repo root puts it inside this workflow's `protoc/**` path
+  # trigger — a repo-root `logo.*` sits in no path filter, so replacing it
+  # would publish nothing. CATALOG.md is found by the default probe beside
+  # this file.
+  logo: logo.svg
+
+versions:
+  # 33.0.0 is the floor that confines this mirror to the MAINLINE train. The
+  # concurrent LTS branches still publishing patches (v25.9 on 2026-03-25,
+  # v29.6 on 2026-02-04) both parse BELOW this floor and are excluded by
+  # version, not by date — which is the only ordering that survives v34.2 being
+  # published a day after v35.0.
+  #
+  # In-range set, exhaustively — the 12 versions the generator emits at or
+  # above this floor: 33.0.0 33.1.0 33.2.0 33.3.0 33.4.0 33.5.0 33.6.0 34.0.0
+  # 34.1.0 34.2.0 35.0.0 35.1.0. Every one carries the full asset set above,
+  # and the generator drops any release that does not, so there is no
+  # asset-less version inside the range for the pipeline to skip silently.
+  #
+  # Normalized spelling: the floor is compared against the version the
+  # generator emits (`33.0.0`), not against upstream's tag (`v33.0`).
+  min: "33.0.0"
+  new_per_run: 12
+  # Staggered off the hour against the rest of the fleet so the mirrors don't
+  # hit the GitHub releases API in the same minute. Omitting this would leave
+  # the generated workflow with no `schedule:` trigger at all.
+  poll_interval: "4 */6 * * *"
+
+tests:
+  # `script:` resolves from the REPOSITORY ROOT — the opposite of
+  # `metadata.default` and `catalog.*` above.
+  - name: smoke
+    script: protoc/tests/smoke.star
+
+platforms:
+  # Container legs, not native ones: each image runs the same bundle under its
+  # own loader, and `(version, platform)` is green only when every leg is.
+  #
+  # ubuntu + alpine + fedora on both arches — the deliberate other half of the
+  # BARE-key decision recorded above `assets:`. The alpine leg is the ONLY
+  # evidence that "requires nothing of the host userland" is honest; drop it
+  # and the claim goes back to being merely asserted.
+  linux/amd64:
+    runner: ubuntu-latest
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+  linux/arm64:
+    # arm64 container legs run natively — no qemu — so the runner arch must
+    # match the platform or the renderer's guard reds the leg up front.
+    runner: ubuntu-24.04-arm
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+  # Pass 2 (darwin) — macos-14 for BOTH, never native macos-13: GitHub's Intel
+  # pool is exhausted, a queued leg never schedules, and `push` (needs: test)
+  # then deadlocks the whole mirror. The amd64 slice runs under Rosetta 2.
+  # darwin/amd64:
+  #   runner: macos-14
+  # darwin/arm64:
+  #   runner: macos-14
+  # Pass 3 (windows) — amd64 only. No `windows/arm64`: upstream ships no arm64
+  # PE on any release in range (checked in the asset listing above), and a
+  # declared-but-unmatched platform boots a runner and reports SUCCESS having
+  # tested nothing.
+  # windows/amd64:
+  #   runner: windows-latest
+  #   shell: pwsh
+
+skip_prereleases: true
+cascade: true
+
+# `date`, not `none`: a cascade tag (`latest`, `35`, `35.1`) re-points on every
+# re-publish, and without a build segment the new manifest reuses the version
+# tag, orphaning the prior digest for registry GC to reap — which breaks any
+# `@sha256:` pin in a consumer's `ocx.lock`. Safe here because protobuf's
+# versions carry no `+build` metadata of their own; `date` would EMPTY the
+# mirror if they did.
+build_timestamp: date
+
+# No `verify:` block. `github_asset_digest` reads GitHub's own asset digest and
+# is a `github_release`-source feature; the `url_index` equivalent is
+# `checksums_file`, and protobuf publishes no checksum manifest with its
+# releases (only `*.intoto.jsonl` provenance attestations, which are not a
+# digest list this pipeline can consume). The download URLs are GitHub's own
+# HTTPS release-asset URLs, so transport integrity is TLS-backed but the
+# content digest is not independently re-checked. Same posture as
+# `mirror-helm`, for the same reason.
+
+concurrency:
+  max_downloads: 8
+  max_bundles: 4
+  max_pushes: 2
+  rate_limit_ms: 100
+  max_retries: 3
+  compression_threads: 0
+
+annotations:
+  # From the Phase 1.5 gate above — the verified root LICENSE file, NOT the
+  # API's `NOASSERTION`.
+  org.opencontainers.image.licenses: "BSD-3-Clause"
+
+notify:
+  discord:
+    webhook_secret: OCX_MIRROR_DISCORD_HOOK
+    user_id: "227748867204972545"  # pinged in-message on failures
+
+announce:
+  # Spelled out, not derived from target.repository — the logical name and the
+  # physical path are related by convention only.
+  package: protocolbuffers/protoc
+  fork: ocx-contrib/index

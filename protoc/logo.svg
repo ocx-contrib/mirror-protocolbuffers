@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="protoc">
+  <title>protoc</title>
+  <!-- Original mark. Protocol Buffers publishes no official logo (the
+       protobuf.dev site is wordmark-only), so this is an authored geometric
+       stand-in: three length-delimited fields of a serialized message, the
+       widest first, nested inside the message frame. -->
+  <rect width="512" height="512" rx="96" fill="#4285F4"/>
+  <g fill="#ffffff">
+    <rect x="112" y="144" width="288" height="48" rx="24"/>
+    <rect x="112" y="232" width="208" height="48" rx="24"/>
+    <rect x="112" y="320" width="128" height="48" rx="24"/>
+    <rect x="272" y="320" width="128" height="48" rx="24" opacity="0.45"/>
+  </g>
+</svg>
