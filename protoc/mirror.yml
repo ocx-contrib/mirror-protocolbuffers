@@ -173,11 +173,10 @@ assets:
     - "^protoc-\\d+\\.\\d+-linux-x86_64\\.zip$"
   linux/arm64:
     - "^protoc-\\d+\\.\\d+-linux-aarch_64\\.zip$"
-  # Pass 2 (darwin) — uncommented once pass 1 is green end to end.
-  # darwin/amd64:
-  #   - "^protoc-\\d+\\.\\d+-osx-x86_64\\.zip$"
-  # darwin/arm64:
-  #   - "^protoc-\\d+\\.\\d+-osx-aarch_64\\.zip$"
+  darwin/amd64:
+    - "^protoc-\\d+\\.\\d+-osx-x86_64\\.zip$"
+  darwin/arm64:
+    - "^protoc-\\d+\\.\\d+-osx-aarch_64\\.zip$"
   # Pass 3 (windows) — amd64 only; upstream ships no arm64 PE.
   # windows/amd64:
   #   - "^protoc-\\d+\\.\\d+-win64\\.zip$"
@@ -270,13 +269,14 @@ platforms:
       - { image: "ubuntu:24.04", shell: bash }
       - { image: "alpine:3.20",  shell: sh }
       - { image: "fedora:40",    shell: bash }
-  # Pass 2 (darwin) — macos-14 for BOTH, never native macos-13: GitHub's Intel
-  # pool is exhausted, a queued leg never schedules, and `push` (needs: test)
-  # then deadlocks the whole mirror. The amd64 slice runs under Rosetta 2.
-  # darwin/amd64:
-  #   runner: macos-14
-  # darwin/arm64:
-  #   runner: macos-14
+  # macos-14 for BOTH, never native macos-13: GitHub's Intel pool is exhausted,
+  # a queued leg never schedules, and `push` (needs: test) then deadlocks the
+  # whole mirror. The amd64 slice runs under Rosetta 2 — and it is a genuine
+  # per-arch build here, not a fat binary, so the two legs test different bytes.
+  darwin/amd64:
+    runner: macos-14
+  darwin/arm64:
+    runner: macos-14
   # Pass 3 (windows) — amd64 only. No `windows/arm64`: upstream ships no arm64
   # PE on any release in range (checked in the asset listing above), and a
   # declared-but-unmatched platform boots a runner and reports SUCCESS having
