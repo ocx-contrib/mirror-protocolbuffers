@@ -239,7 +239,7 @@ versions:
   # Staggered off the hour against the rest of the fleet so the mirrors don't
   # hit the GitHub releases API in the same minute. Omitting this would leave
   # the generated workflow with no `schedule:` trigger at all.
-  poll_interval: "4 */6 * * *"
+  poll_interval: "20 0-23/6 * * *"
 
 tests:
   # `script:` resolves from the REPOSITORY ROOT — the opposite of
